@@ -109,6 +109,16 @@ func (c *Client) PowerOff(ctx context.Context) error {
 		if request != unknown {
 			return c.requestpowerState(ctx, request)
 		}
+		if len(status.AvailableRequestedpowerStates) == 0 {
+			var lastErr error
+			for _, s := range getPowerOffStates() {
+				if lastErr = c.requestpowerState(ctx, s); lastErr == nil {
+					return nil
+				}
+				c.Log.V(1).Info("power off state rejected, trying next", "state", s, "err", lastErr)
+			}
+			return fmt.Errorf("all power off states failed for empty AvailableRequestedPowerStates, last error: %w", lastErr)
+		}
 
 		return fmt.Errorf("there is no implemented transition state to power off the machine from the current machine state %q. available states are: %v", status.powerState, status.AvailableRequestedpowerStates)
 	}
@@ -159,7 +169,9 @@ func (c *Client) requestpowerState(ctx context.Context, requestedpowerState powe
 	if err != nil {
 		return err
 	}
-	if !containspowerState(status.AvailableRequestedpowerStates, requestedpowerState) {
+	// Some AMT implementations (e.g. AMT 8.1) return an empty AvailableRequestedPowerStates list.
+	// In that case skip the pre-check and let RequestPowerStateChange report failure instead.
+	if len(status.AvailableRequestedpowerStates) > 0 && !containspowerState(status.AvailableRequestedpowerStates, requestedpowerState) {
 		return fmt.Errorf("there is no implemented transition state to <%d> from the current machine state <%d>. available states are: %v", requestedpowerState, status.powerState, status.AvailableRequestedpowerStates)
 	}
 	c.Log.V(1).Info("sending request to machine", "PowerState", requestedpowerState)
@@ -185,6 +197,9 @@ func (c *Client) requestpowerState(ctx context.Context, requestedpowerState powe
 		return err
 	}
 	c.Log.V(1).Info("RequestPowerState response", "response", val)
+	if val != 0 {
+		return fmt.Errorf("RequestPowerStateChange returned non-zero response: %d", val)
+	}
 
 	return nil
 }
