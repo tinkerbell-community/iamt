@@ -1,4 +1,4 @@
-package iamt
+package internal
 
 import (
 	"context"
@@ -100,29 +100,29 @@ func (f Facts) AllowsAdminControlMode() bool {
 func (c *Client) Facts(ctx context.Context) (*Facts, error) {
 	f := &Facts{}
 
-	setup, err := c.msg.AMT.SetupAndConfigurationService.Get()
+	setup, err := c.Msg.AMT.SetupAndConfigurationService.Get()
 	if err != nil {
 		return nil, fmt.Errorf("iamt: reading setup and configuration service: %w", err)
 	}
 	f.ProvisioningState = provisioningStateString(int(setup.Body.GetResponse.ProvisioningState))
 	f.DNSSuffix = setup.Body.GetResponse.DhcpDNSSuffix
 
-	if hbs, err := c.msg.IPS.HostBasedSetupService.Get(); err == nil {
+	if hbs, err := c.Msg.IPS.HostBasedSetupService.Get(); err == nil {
 		f.ControlMode = controlModeString(int(hbs.Body.GetResponse.CurrentControlMode))
 		for _, m := range hbs.Body.GetResponse.AllowedControlModes {
 			f.AllowedControlModes = append(f.AllowedControlModes, controlModeString(int(m)))
 		}
 	}
 
-	if gs, err := c.msg.AMT.GeneralSettings.Get(); err == nil {
+	if gs, err := c.Msg.AMT.GeneralSettings.Get(); err == nil {
 		f.DigestRealm = gs.Body.GetResponse.DigestRealm
 	}
 
-	if csp, err := c.msg.CIM.ComputerSystemPackage.Get(); err == nil {
+	if csp, err := c.Msg.CIM.ComputerSystemPackage.Get(); err == nil {
 		f.PlatformGUID = normalizeGUID(csp.Body.GetResponse.PlatformGUID)
 	}
 
-	if bc, err := c.msg.AMT.BootCapabilities.Get(); err == nil {
+	if bc, err := c.Msg.AMT.BootCapabilities.Get(); err == nil {
 		r := bc.Body.BootCapabilitiesGetResponse
 		f.BootCapabilities = BootCapabilities{
 			PXE:               r.ForcePXEBoot,
@@ -136,7 +136,7 @@ func (c *Client) Facts(ctx context.Context) (*Facts, error) {
 		}
 	}
 
-	if rd, err := c.msg.AMT.RedirectionService.Get(); err == nil {
+	if rd, err := c.Msg.AMT.RedirectionService.Get(); err == nil {
 		f.Redirection = Redirection{
 			EnabledState:    int(rd.Body.GetAndPutResponse.EnabledState),
 			ListenerEnabled: rd.Body.GetAndPutResponse.ListenerEnabled,
@@ -153,11 +153,11 @@ func (c *Client) Facts(ctx context.Context) (*Facts, error) {
 func (c *Client) firmware(_ context.Context) Firmware {
 	var fw Firmware
 
-	enum, err := c.msg.CIM.SoftwareIdentity.Enumerate()
+	enum, err := c.Msg.CIM.SoftwareIdentity.Enumerate()
 	if err != nil {
 		return fw
 	}
-	pull, err := c.msg.CIM.SoftwareIdentity.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	pull, err := c.Msg.CIM.SoftwareIdentity.Pull(enum.Body.EnumerateResponse.EnumerationContext)
 	if err != nil {
 		return fw
 	}

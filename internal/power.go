@@ -1,4 +1,4 @@
-package iamt
+package internal
 
 import (
 	"context"
@@ -100,7 +100,7 @@ func (s Status) PoweredOn() bool { return s.PowerState == PowerStateOn }
 
 // Status reads the current power status.
 func (c *Client) Status(_ context.Context) (Status, error) {
-	resp, err := c.msg.CIM.AssociatedPowerManagementService.Get()
+	resp, err := c.Msg.CIM.AssociatedPowerManagementService.Get()
 	if err != nil {
 		return Status{}, fmt.Errorf("iamt: reading power status: %w", err)
 	}
@@ -123,7 +123,7 @@ func (c *Client) IsPoweredOn(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	c.Logger.V(1).Info("states",
+	c.Log.V(1).Info("states",
 		"currentState", status.PowerState,
 		"availableStates", status.AvailableRequestedPowerStates)
 	return status.PoweredOn(), nil
@@ -166,7 +166,7 @@ func (c *Client) PowerOff(ctx context.Context) error {
 			if lastErr = c.RequestPowerState(ctx, s); lastErr == nil {
 				return nil
 			}
-			c.Logger.V(1).Info("power off state rejected, trying next", "state", s, "err", lastErr)
+			c.Log.V(1).Info("power off state rejected, trying next", "state", s, "err", lastErr)
 		}
 		return fmt.Errorf("iamt: all power off states failed for empty AvailableRequestedPowerStates, last error: %w", lastErr)
 	}
@@ -195,7 +195,7 @@ func (c *Client) PowerCycle(ctx context.Context) error {
 			if lastErr = c.RequestPowerState(ctx, s); lastErr == nil {
 				return nil
 			}
-			c.Logger.V(1).Info("power cycle state rejected, trying next", "state", s, "err", lastErr)
+			c.Log.V(1).Info("power cycle state rejected, trying next", "state", s, "err", lastErr)
 		}
 		return fmt.Errorf("iamt: all power cycle states failed for empty AvailableRequestedPowerStates, last error: %w", lastErr)
 	}
@@ -222,15 +222,15 @@ func (c *Client) RequestPowerState(ctx context.Context, requested PowerState) er
 			requested, status.PowerState, status.AvailableRequestedPowerStates)
 	}
 
-	c.Logger.V(1).Info("sending request to machine", "PowerState", requested)
+	c.Log.V(1).Info("sending request to machine", "PowerState", requested)
 
-	resp, err := c.msg.CIM.PowerManagementService.RequestPowerStateChange(cimpower.PowerState(requested))
+	resp, err := c.Msg.CIM.PowerManagementService.RequestPowerStateChange(cimpower.PowerState(requested))
 	if err != nil {
 		return fmt.Errorf("iamt: requesting power state %d: %w", requested, err)
 	}
 
 	rv := resp.Body.RequestPowerStateChangeResponse.ReturnValue
-	c.Logger.V(1).Info("RequestPowerState response", "response", rv)
+	c.Log.V(1).Info("RequestPowerState response", "response", rv)
 	if rv != 0 {
 		return fmt.Errorf("iamt: RequestPowerStateChange returned non-zero response: %d", rv)
 	}

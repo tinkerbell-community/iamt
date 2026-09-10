@@ -1,4 +1,4 @@
-package iamt
+package internal
 
 import (
 	"context"
@@ -148,7 +148,7 @@ func (c *Client) SetAdminPassword(_ context.Context, username, realm, newPasswor
 	}
 
 	digest := DigestPassword(username, realm, newPassword)
-	resp, err := c.msg.AMT.AuthorizationService.SetAdminAclEntryEx(username, digest)
+	resp, err := c.Msg.AMT.AuthorizationService.SetAdminAclEntryEx(username, digest)
 	if err != nil {
 		return fmt.Errorf("iamt: setting admin password: %w", err)
 	}

@@ -1,4 +1,4 @@
-package iamt
+package internal
 
 import (
 	"context"
@@ -86,7 +86,7 @@ func (c *Client) SetBootOverride(ctx context.Context, target BootTarget) error {
 
 // ClearBootOverride disarms any pending one-shot boot override.
 func (c *Client) ClearBootOverride(_ context.Context) error {
-	resp, err := c.msg.CIM.BootService.SetBootConfigRole(bootConfigInstance, roleIsNotNext)
+	resp, err := c.Msg.CIM.BootService.SetBootConfigRole(bootConfigInstance, roleIsNotNext)
 	if err != nil {
 		return fmt.Errorf("iamt: clearing boot override: %w", err)
 	}
@@ -113,7 +113,7 @@ func (c *Client) InsertVirtualMedia(ctx context.Context, imageURL string, enforc
 		return err
 	}
 
-	caps, err := c.msg.AMT.BootCapabilities.Get()
+	caps, err := c.Msg.AMT.BootCapabilities.Get()
 	if err != nil {
 		return fmt.Errorf("iamt: reading boot capabilities: %w", err)
 	}
@@ -150,7 +150,7 @@ func (c *Client) EjectVirtualMedia(ctx context.Context) error { return c.ClearBo
 // RPEEnabled and friends), and leaving a flag set from a previous override is
 // how a device ends up booting the wrong thing.
 func (c *Client) applyBootSettings(_ context.Context, mutate func(*amtboot.BootSettingDataRequest), source *cimboot.Source) error {
-	cur, err := c.msg.AMT.BootSettingData.Get()
+	cur, err := c.Msg.AMT.BootSettingData.Get()
 	if err != nil {
 		return fmt.Errorf("iamt: reading boot setting data: %w", err)
 	}
@@ -165,7 +165,7 @@ func (c *Client) applyBootSettings(_ context.Context, mutate func(*amtboot.BootS
 		mutate(&req)
 	}
 
-	if _, err := c.msg.AMT.BootSettingData.Put(req); err != nil {
+	if _, err := c.Msg.AMT.BootSettingData.Put(req); err != nil {
 		return fmt.Errorf("iamt: writing boot setting data: %w", err)
 	}
 
@@ -173,7 +173,7 @@ func (c *Client) applyBootSettings(_ context.Context, mutate func(*amtboot.BootS
 		return nil
 	}
 
-	order, err := c.msg.CIM.BootConfigSetting.ChangeBootOrder(*source)
+	order, err := c.Msg.CIM.BootConfigSetting.ChangeBootOrder(*source)
 	if err != nil {
 		return fmt.Errorf("iamt: setting boot order to %q: %w", *source, err)
 	}
@@ -181,7 +181,7 @@ func (c *Client) applyBootSettings(_ context.Context, mutate func(*amtboot.BootS
 		return fmt.Errorf("iamt: boot order %q rejected with return value %d", *source, rv)
 	}
 
-	role, err := c.msg.CIM.BootService.SetBootConfigRole(bootConfigInstance, roleIsNextSingleUse)
+	role, err := c.Msg.CIM.BootService.SetBootConfigRole(bootConfigInstance, roleIsNextSingleUse)
 	if err != nil {
 		return fmt.Errorf("iamt: arming boot override: %w", err)
 	}

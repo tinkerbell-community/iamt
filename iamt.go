@@ -4,6 +4,9 @@
 // github.com/device-management-toolkit/go-wsman-messages, Intel's own message
 // library, which covers the full AMT, CIM and IPS class surface. Transport and
 // authentication are this package's own: see internal/digest for why.
+//
+// This file is the public surface. Everything behind it lives in internal and
+// is free to change.
 package iamt
 
 import (
@@ -19,6 +22,7 @@ import (
 	"github.com/device-management-toolkit/go-wsman-messages/v2/pkg/wsman"
 	wsmanclient "github.com/device-management-toolkit/go-wsman-messages/v2/pkg/wsman/client"
 	"github.com/go-logr/logr"
+	"github.com/jacobweinstock/iamt/internal"
 	"github.com/jacobweinstock/iamt/internal/digest"
 )
 
@@ -33,6 +37,103 @@ const (
 // DefaultTimeout bounds each operation. AMT firmware is slow to wake, so this
 // is deliberately generous.
 const DefaultTimeout = 30 * time.Second
+
+// Types returned by this package. They are aliases so the implementation can
+// stay in internal while callers can still name what they receive.
+type (
+	// Status is the observed power state of a device.
+	Status = internal.Status
+	// PowerState is a CIM power state value.
+	PowerState = internal.PowerState
+	// Facts is everything about a device that is not hardware inventory.
+	Facts = internal.Facts
+	// Firmware holds AMT firmware versions.
+	Firmware = internal.Firmware
+	// BootCapabilities is what a device can be told to boot.
+	BootCapabilities = internal.BootCapabilities
+	// Redirection is the state of AMT's redirection service.
+	Redirection = internal.Redirection
+	// Inventory is a device's hardware inventory.
+	Inventory = internal.Inventory
+	// Baseboard is the system board.
+	Baseboard = internal.Baseboard
+	// BIOS is the system firmware.
+	BIOS = internal.BIOS
+	// CPU is one processor package.
+	CPU = internal.CPU
+	// MemoryModule is one installed DIMM.
+	MemoryModule = internal.MemoryModule
+	// NIC is one host network interface.
+	NIC = internal.NIC
+	// Drive is one storage device.
+	Drive = internal.Drive
+	// BootTarget names a boot device.
+	BootTarget = internal.BootTarget
+)
+
+// Power states, using the canonical DMTF valuemap.
+const (
+	PowerUnknown              = internal.PowerUnknown
+	PowerOther                = internal.PowerOther
+	PowerStateOn              = internal.PowerStateOn
+	PowerSleepLight           = internal.PowerSleepLight
+	PowerSleepDeep            = internal.PowerSleepDeep
+	PowerCycleOffSoft         = internal.PowerCycleOffSoft
+	PowerOffHard              = internal.PowerOffHard
+	PowerHibernateOffSoft     = internal.PowerHibernateOffSoft
+	PowerOffSoft              = internal.PowerOffSoft
+	PowerCycleOffHard         = internal.PowerCycleOffHard
+	PowerMasterBusReset       = internal.PowerMasterBusReset
+	PowerDiagnosticInterrupt  = internal.PowerDiagnosticInterrupt
+	PowerOffSoftGraceful      = internal.PowerOffSoftGraceful
+	PowerOffHardGraceful      = internal.PowerOffHardGraceful
+	PowerMasterBusResetGrace  = internal.PowerMasterBusResetGrace
+	PowerCycleOffSoftGraceful = internal.PowerCycleOffSoftGraceful
+	PowerCycleOffHardGraceful = internal.PowerCycleOffHardGraceful
+)
+
+// Boot targets, named with Redfish vocabulary.
+const (
+	BootPxe       = internal.BootPxe
+	BootHdd       = internal.BootHdd
+	BootCd        = internal.BootCd
+	BootUefiHTTP  = internal.BootUefiHTTP
+	BootBiosSetup = internal.BootBiosSetup
+)
+
+// Control modes reported by IPS_HostBasedSetupService.
+const (
+	ControlModeNotProvisioned = internal.ControlModeNotProvisioned
+	ControlModeClient         = internal.ControlModeClient
+	ControlModeAdmin          = internal.ControlModeAdmin
+)
+
+// Provisioning states reported by AMT_SetupAndConfigurationService.
+const (
+	ProvisioningPre  = internal.ProvisioningPre
+	ProvisioningIn   = internal.ProvisioningIn
+	ProvisioningPost = internal.ProvisioningPost
+)
+
+// Password length bounds, enforced by AMT firmware.
+const (
+	MinPasswordLength = internal.MinPasswordLength
+	MaxPasswordLength = internal.MaxPasswordLength
+)
+
+// Errors callers may want to match.
+var (
+	// ErrPasswordPolicy is returned when a password violates AMT's rules.
+	ErrPasswordPolicy = internal.ErrPasswordPolicy
+	// ErrUnsupportedBootTarget is returned for a target a device cannot boot.
+	ErrUnsupportedBootTarget = internal.ErrUnsupportedBootTarget
+	// ErrVirtualMediaUnsupported is returned when firmware does not report
+	// UEFI HTTPS boot.
+	ErrVirtualMediaUnsupported = internal.ErrVirtualMediaUnsupported
+	// ErrCertificatePinning is returned when a device presents a certificate
+	// that does not match the configured pin.
+	ErrCertificatePinning = digest.ErrCertificatePinning
+)
 
 // Client used to perform actions on the machine.
 type Client struct {
@@ -55,8 +156,7 @@ type Client struct {
 	// encrypted.
 	PinnedCert string
 
-	transport *digest.Transport
-	msg       wsman.Messages
+	conn internal.Client
 }
 
 // Option for setting optional Client values.
@@ -124,7 +224,7 @@ func NewClient(host, user, passwd string, opts ...Option) *Client {
 
 	useTLS := strings.EqualFold(defaultClient.Scheme, "https")
 
-	defaultClient.transport = &digest.Transport{
+	transport := &digest.Transport{
 		Base:     baseTransport(useTLS, defaultClient.PinnedCert),
 		Username: user,
 		Password: passwd,
@@ -136,16 +236,21 @@ func NewClient(host, user, passwd string, opts ...Option) *Client {
 	// transport above, whose challenge parser copes with the malformed
 	// WWW-Authenticate headers some Intel NUCs emit. go-wsman-messages' own
 	// parser silently mis-reads them.
-	defaultClient.msg = wsman.NewMessages(wsmanclient.Parameters{
-		Target:            host,
-		Username:          user,
-		Password:          passwd,
-		UseDigest:         false,
-		UseTLS:            useTLS,
-		SelfSignedAllowed: true,
-		Transport:         defaultClient.transport,
-		Timeout:           defaultClient.timeout(),
-	})
+	defaultClient.conn = internal.Client{
+		Log:       defaultClient.Logger,
+		Transport: transport,
+		Endpoint:  defaultClient.endpoint(),
+		Msg: wsman.NewMessages(wsmanclient.Parameters{
+			Target:            host,
+			Username:          user,
+			Password:          passwd,
+			UseDigest:         false,
+			UseTLS:            useTLS,
+			SelfSignedAllowed: true,
+			Transport:         transport,
+			Timeout:           defaultClient.timeout(),
+		}),
+	}
 
 	return defaultClient
 }
@@ -171,48 +276,80 @@ func (c *Client) endpoint() string {
 }
 
 // Open the client.
-//
-// It confirms the endpoint is an AMT WS-Man service by requiring a digest
-// challenge, and caches that challenge so subsequent calls skip a round trip.
-// It does not verify credentials; a wrong password surfaces on the first real
-// operation.
-func (c *Client) Open(ctx context.Context) error {
-	return c.transport.Prime(ctx, c.endpoint())
-}
+func (c *Client) Open(ctx context.Context) error { return c.conn.Open(ctx) }
 
 // Close the client.
-func (c *Client) Close(_ context.Context) error {
-	c.transport.Reset()
-	return nil
+func (c *Client) Close(ctx context.Context) error { return c.conn.Close(ctx) }
+
+// PowerOn will power on a given machine.
+func (c *Client) PowerOn(ctx context.Context) error { return c.conn.PowerOn(ctx) }
+
+// PowerOff will power off a given machine.
+func (c *Client) PowerOff(ctx context.Context) error { return c.conn.PowerOff(ctx) }
+
+// PowerCycle will power cycle a given machine.
+func (c *Client) PowerCycle(ctx context.Context) error { return c.conn.PowerCycle(ctx) }
+
+// IsPoweredOn checks current power state.
+func (c *Client) IsPoweredOn(ctx context.Context) (bool, error) { return c.conn.IsPoweredOn(ctx) }
+
+// Status reads the current power status.
+func (c *Client) Status(ctx context.Context) (Status, error) { return c.conn.Status(ctx) }
+
+// RequestPowerState asks the device for a specific transition.
+func (c *Client) RequestPowerState(ctx context.Context, requested PowerState) error {
+	return c.conn.RequestPowerState(ctx, requested)
 }
 
-// baseTransport builds the underlying HTTP transport.
-//
-// Supplying a transport to go-wsman-messages bypasses the TLS configuration it
-// would otherwise build, so the TLS settings have to be established here.
-func baseTransport(useTLS bool, pinnedCert string) http.RoundTripper {
-	if !useTLS {
-		return &http.Transport{
-			MaxIdleConns:    2,
-			IdleConnTimeout: 90 * time.Second,
-		}
-	}
+// SetPXE makes sure the node will pxe boot next time.
+func (c *Client) SetPXE(ctx context.Context) error { return c.conn.SetPXE(ctx) }
 
-	cfg := &tls.Config{
-		// AMT's factory certificate is self-signed, so chain verification can
-		// never pass. Trust comes from the pin below when one is configured.
-		InsecureSkipVerify: true, //nolint:gosec // see PinnedCert
-	}
-	if pinnedCert != "" {
-		cfg.VerifyPeerCertificate = digest.PinnedCertVerifier(pinnedCert)
-	}
-
-	return &http.Transport{
-		MaxIdleConns:    2,
-		IdleConnTimeout: 90 * time.Second,
-		TLSClientConfig: cfg,
-	}
+// SetBootOverride arms a one-shot boot override.
+func (c *Client) SetBootOverride(ctx context.Context, target BootTarget) error {
+	return c.conn.SetBootOverride(ctx, target)
 }
+
+// ClearBootOverride disarms any pending one-shot boot override.
+func (c *Client) ClearBootOverride(ctx context.Context) error {
+	return c.conn.ClearBootOverride(ctx)
+}
+
+// InsertVirtualMedia arms a one-shot boot from an HTTPS-hosted image.
+func (c *Client) InsertVirtualMedia(ctx context.Context, imageURL string, enforceSecureBoot bool) error {
+	return c.conn.InsertVirtualMedia(ctx, imageURL, enforceSecureBoot)
+}
+
+// EjectVirtualMedia clears a pending media boot.
+func (c *Client) EjectVirtualMedia(ctx context.Context) error {
+	return c.conn.EjectVirtualMedia(ctx)
+}
+
+// Facts reads the device's identity, provisioning state and capabilities.
+func (c *Client) Facts(ctx context.Context) (*Facts, error) { return c.conn.Facts(ctx) }
+
+// Inventory reads the device's hardware inventory.
+func (c *Client) Inventory(ctx context.Context) (*Inventory, error) { return c.conn.Inventory(ctx) }
+
+// SetAdminPassword changes the admin account password.
+func (c *Client) SetAdminPassword(ctx context.Context, username, realm, newPassword string) error {
+	return c.conn.SetAdminPassword(ctx, username, realm, newPassword)
+}
+
+// GeneratePassword returns a random password satisfying AMT's complexity
+// rules.
+func GeneratePassword(length int) (string, error) { return internal.GeneratePassword(length) }
+
+// ValidatePassword reports whether a password satisfies AMT's rules.
+func ValidatePassword(pw string) error { return internal.ValidatePassword(pw) }
+
+// DigestPassword returns the MD5 digest AMT expects when setting a password:
+// MD5(username:realm:password), hex encoded.
+func DigestPassword(username, realm, password string) string {
+	return internal.DigestPassword(username, realm, password)
+}
+
+// NormalizeMAC renders a MAC address as lower-case colon-separated octets.
+func NormalizeMAC(s string) string { return internal.NormalizeMAC(s) }
 
 // Fingerprint dials the device and returns the hex SHA-256 of its leaf
 // certificate, without authenticating.
@@ -245,4 +382,32 @@ func (c *Client) Fingerprint(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("iamt: device presented no certificate")
 	}
 	return digest.Fingerprint(certs[0].Raw), nil
+}
+
+// baseTransport builds the underlying HTTP transport.
+//
+// Supplying a transport to go-wsman-messages bypasses the TLS configuration it
+// would otherwise build, so the TLS settings have to be established here.
+func baseTransport(useTLS bool, pinnedCert string) http.RoundTripper {
+	if !useTLS {
+		return &http.Transport{
+			MaxIdleConns:    2,
+			IdleConnTimeout: 90 * time.Second,
+		}
+	}
+
+	cfg := &tls.Config{
+		// AMT's factory certificate is self-signed, so chain verification can
+		// never pass. Trust comes from the pin below when one is configured.
+		InsecureSkipVerify: true, //nolint:gosec // see PinnedCert
+	}
+	if pinnedCert != "" {
+		cfg.VerifyPeerCertificate = digest.PinnedCertVerifier(pinnedCert)
+	}
+
+	return &http.Transport{
+		MaxIdleConns:    2,
+		IdleConnTimeout: 90 * time.Second,
+		TLSClientConfig: cfg,
+	}
 }

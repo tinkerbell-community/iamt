@@ -1,4 +1,4 @@
-package iamt
+package internal
 
 import (
 	"context"
@@ -122,11 +122,11 @@ type chassisInfo struct {
 }
 
 func (c *Client) chassis(_ context.Context) (chassisInfo, error) {
-	enum, err := c.msg.CIM.Chassis.Enumerate()
+	enum, err := c.Msg.CIM.Chassis.Enumerate()
 	if err != nil {
 		return chassisInfo{}, fmt.Errorf("iamt: enumerating chassis: %w", err)
 	}
-	pull, err := c.msg.CIM.Chassis.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	pull, err := c.Msg.CIM.Chassis.Pull(enum.Body.EnumerateResponse.EnumerationContext)
 	if err != nil {
 		return chassisInfo{}, fmt.Errorf("iamt: reading chassis: %w", err)
 	}
@@ -142,11 +142,11 @@ func (c *Client) chassis(_ context.Context) (chassisInfo, error) {
 }
 
 func (c *Client) baseboard(_ context.Context) Baseboard {
-	enum, err := c.msg.CIM.Card.Enumerate()
+	enum, err := c.Msg.CIM.Card.Enumerate()
 	if err != nil {
 		return Baseboard{}
 	}
-	pull, err := c.msg.CIM.Card.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	pull, err := c.Msg.CIM.Card.Pull(enum.Body.EnumerateResponse.EnumerationContext)
 	if err != nil || len(pull.Body.PullResponse.CardItems) == 0 {
 		return Baseboard{}
 	}
@@ -160,7 +160,7 @@ func (c *Client) baseboard(_ context.Context) Baseboard {
 }
 
 func (c *Client) bios(_ context.Context) BIOS {
-	resp, err := c.msg.CIM.BIOSElement.Get()
+	resp, err := c.Msg.CIM.BIOSElement.Get()
 	if err != nil {
 		return BIOS{}
 	}
@@ -173,11 +173,11 @@ func (c *Client) bios(_ context.Context) BIOS {
 }
 
 func (c *Client) cpus(_ context.Context) []CPU {
-	enum, err := c.msg.CIM.Processor.Enumerate()
+	enum, err := c.Msg.CIM.Processor.Enumerate()
 	if err != nil {
 		return nil
 	}
-	pull, err := c.msg.CIM.Processor.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	pull, err := c.Msg.CIM.Processor.Pull(enum.Body.EnumerateResponse.EnumerationContext)
 	if err != nil {
 		return nil
 	}
@@ -197,11 +197,11 @@ func (c *Client) cpus(_ context.Context) []CPU {
 }
 
 func (c *Client) memory(_ context.Context) []MemoryModule {
-	enum, err := c.msg.CIM.PhysicalMemory.Enumerate()
+	enum, err := c.Msg.CIM.PhysicalMemory.Enumerate()
 	if err != nil {
 		return nil
 	}
-	pull, err := c.msg.CIM.PhysicalMemory.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	pull, err := c.Msg.CIM.PhysicalMemory.Pull(enum.Body.EnumerateResponse.EnumerationContext)
 	if err != nil {
 		return nil
 	}
@@ -230,11 +230,11 @@ func (c *Client) memory(_ context.Context) []MemoryModule {
 // separators. Both are checked, and the result is normalised to the
 // colon-separated lower-case form.
 func (c *Client) nics(_ context.Context) []NIC {
-	enum, err := c.msg.CIM.EthernetPort.Enumerate()
+	enum, err := c.Msg.CIM.EthernetPort.Enumerate()
 	if err != nil {
 		return nil
 	}
-	pull, err := c.msg.CIM.EthernetPort.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	pull, err := c.Msg.CIM.EthernetPort.Pull(enum.Body.EnumerateResponse.EnumerationContext)
 	if err != nil {
 		return nil
 	}
@@ -264,11 +264,11 @@ func (c *Client) nics(_ context.Context) []NIC {
 }
 
 func (c *Client) drives(_ context.Context) []Drive {
-	enum, err := c.msg.CIM.MediaAccessDevice.Enumerate()
+	enum, err := c.Msg.CIM.MediaAccessDevice.Enumerate()
 	if err != nil {
 		return nil
 	}
-	pull, err := c.msg.CIM.MediaAccessDevice.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	pull, err := c.Msg.CIM.MediaAccessDevice.Pull(enum.Body.EnumerateResponse.EnumerationContext)
 	if err != nil {
 		return nil
 	}
