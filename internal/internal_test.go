@@ -144,3 +144,36 @@ func TestControlModeAndProvisioningStrings(t *testing.T) {
 		t.Errorf("provisioningStateString(2) = %q", got)
 	}
 }
+
+// trailingOrdinal is what ties a CIM_MediaAccessDevice to the
+// CIM_PhysicalPackage carrying its model and serial. Getting it wrong attaches
+// one drive's identity to another, which is worse than reporting none.
+func TestTrailingOrdinal(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		in   string
+		want int
+	}{
+		{"MEDIA DEV 0", 0},
+		{"MEDIA DEV 1", 1},
+		{"Storage Media Package 0", 0},
+		{"Storage Media Package 1", 1},
+		// Multi-digit must not be read as its last digit, or drive 10 would
+		// collide with drive 0.
+		{"MEDIA DEV 10", 10},
+		{"Storage Media Package 12", 12},
+		// AMT pads some of these.
+		{"MEDIA DEV 3  ", 3},
+		// No ordinal must not fall back to 0, which is a real index.
+		{"CIM_Chassis", -1},
+		{"Managed System Media Access Device", -1},
+		{"", -1},
+		// A tag that is entirely digits is still an ordinal.
+		{"42", 42},
+	} {
+		if got := trailingOrdinal(tt.in); got != tt.want {
+			t.Errorf("trailingOrdinal(%q) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}

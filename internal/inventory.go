@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -77,15 +78,22 @@ type NIC struct {
 
 // Drive is one storage device.
 //
-// AMT's CIM_MediaAccessDevice reports no model or serial number -- only an
-// identifier, a generic element name and a capacity -- so those are the only
-// fields offered here rather than inventing ones the device cannot fill.
+// AMT splits a drive across two classes: CIM_MediaAccessDevice carries the
+// identifier and capacity, while the model and serial live on the matching
+// CIM_PhysicalPackage. Reading only the former -- which the element name
+// invites, since it is the constant "Managed System Media Access Device" on
+// every drive -- yields a capacity and nothing to attach it to.
 type Drive struct {
 	// ID is the device identifier, e.g. "MEDIA DEV 0".
 	ID string
 	// MaxMediaSizeKB is the capacity as reported by CIM, in kilobytes. Zero
 	// when the device does not report it.
 	MaxMediaSizeKB uint64
+	// Model is the drive's model, e.g. "Lexar SSD NM790 2TB". Empty when no
+	// storage package matches the device.
+	Model string
+	// SerialNumber is the drive's serial. Empty on the same terms as Model.
+	SerialNumber string
 }
 
 // Inventory reads the device's hardware inventory.
@@ -273,15 +281,91 @@ func (c *Client) drives(_ context.Context) []Drive {
 		return nil
 	}
 
+	packages := c.storagePackages()
+
 	var out []Drive
 	for _, d := range pull.Body.PullResponse.MediaAccessDevices {
 		id := strings.TrimSpace(d.DeviceID)
 		if id == "" {
 			continue
 		}
-		out = append(out, Drive{ID: id, MaxMediaSizeKB: d.MaxMediaSize})
+		drive := Drive{ID: id, MaxMediaSizeKB: d.MaxMediaSize}
+		if pkg, ok := packages[trailingOrdinal(id)]; ok {
+			drive.Model = pkg.Model
+			drive.SerialNumber = pkg.SerialNumber
+		}
+		out = append(out, drive)
 	}
 	return out
+}
+
+// storagePackage is the model and serial of one CIM_PhysicalPackage that
+// describes a drive.
+type storagePackage struct {
+	Model        string
+	SerialNumber string
+}
+
+// storagePackageType is the CIM PackageType for "Storage Media Package (e.g.
+// Disk or Tape Drive)". CIM_PhysicalPackage also enumerates the chassis and
+// baseboard, which must not be mistaken for drives.
+const storagePackageType = 15
+
+// storagePackages reads the drive-describing CIM_PhysicalPackage instances,
+// keyed by the ordinal that ties them back to a CIM_MediaAccessDevice.
+//
+// The two classes are related by position and nothing else that AMT exposes:
+// "MEDIA DEV 0" is described by "Storage Media Package 0". DMTF would express
+// this with a CIM_Realizes association, which AMT does not offer, so the
+// ordinal is the only available join. Parsing it from both sides rather than
+// assuming the enumerations arrive in the same order means a device with no
+// counterpart simply keeps an empty model and serial instead of borrowing
+// another drive's identity.
+func (c *Client) storagePackages() map[int]storagePackage {
+	enum, err := c.Msg.CIM.PhysicalPackage.Enumerate()
+	if err != nil {
+		return nil
+	}
+	pull, err := c.Msg.CIM.PhysicalPackage.Pull(enum.Body.EnumerateResponse.EnumerationContext)
+	if err != nil {
+		return nil
+	}
+
+	out := map[int]storagePackage{}
+	for _, p := range pull.Body.PullResponse.PhysicalPackage {
+		if p.PackageType != storagePackageType {
+			continue
+		}
+		ordinal := trailingOrdinal(p.Tag)
+		if ordinal < 0 {
+			continue
+		}
+		// AMT pads these to a fixed width.
+		out[ordinal] = storagePackage{
+			Model:        strings.TrimSpace(p.Model),
+			SerialNumber: strings.TrimSpace(p.SerialNumber),
+		}
+	}
+	return out
+}
+
+// trailingOrdinal returns the integer at the end of s ("MEDIA DEV 10" -> 10),
+// or -1 if it does not end in one. A missing ordinal must not collide with a
+// real index, so it cannot default to zero.
+func trailingOrdinal(s string) int {
+	s = strings.TrimSpace(s)
+	i := len(s)
+	for i > 0 && s[i-1] >= '0' && s[i-1] <= '9' {
+		i--
+	}
+	if i == len(s) {
+		return -1
+	}
+	n, err := strconv.Atoi(s[i:])
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // isZeroMAC reports whether a normalised MAC is all zeroes.
