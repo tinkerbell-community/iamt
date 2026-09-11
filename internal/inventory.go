@@ -314,13 +314,17 @@ const storagePackageType = 15
 // storagePackages reads the drive-describing CIM_PhysicalPackage instances,
 // keyed by the ordinal that ties them back to a CIM_MediaAccessDevice.
 //
-// The two classes are related by position and nothing else that AMT exposes:
-// "MEDIA DEV 0" is described by "Storage Media Package 0". DMTF would express
-// this with a CIM_Realizes association, which AMT does not offer, so the
-// ordinal is the only available join. Parsing it from both sides rather than
-// assuming the enumerations arrive in the same order means a device with no
-// counterpart simply keeps an empty model and serial instead of borrowing
-// another drive's identity.
+// "MEDIA DEV 0" is described by "Storage Media Package 0", and the ordinal is
+// what ties them together here. Parsing it from both sides, rather than
+// assuming the two enumerations arrive in the same order, means a device with
+// no counterpart keeps an empty model and serial instead of borrowing another
+// drive's identity.
+//
+// AMT does also publish the authoritative CIM_Realizes association for these
+// (verified on a NUC15CRHV7: PhysicalPackage "Storage Media Package 0" ->
+// MediaAccessDevice "MEDIA DEV 0"). Using it would remove the dependency on
+// the tags being named in parallel, at the cost of a third round trip and
+// hand-rolled WS-Man -- go-wsman-messages exposes no CIM_Realizes class.
 func (c *Client) storagePackages() map[int]storagePackage {
 	enum, err := c.Msg.CIM.PhysicalPackage.Enumerate()
 	if err != nil {
