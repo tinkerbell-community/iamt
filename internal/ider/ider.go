@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -67,6 +68,7 @@ type Session struct {
 	readBfr    int
 	cdromReady bool
 
+	debug     bool
 	closeOnce sync.Once
 	done      chan struct{}
 	errMu     sync.Mutex
@@ -90,7 +92,7 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 	if cfg.DialTimeout <= 0 {
 		cfg.DialTimeout = 30 * time.Second
 	}
-	s := &Session{cfg: cfg, log: cfg.Logger, done: make(chan struct{})}
+	s := &Session{cfg: cfg, log: cfg.Logger, done: make(chan struct{}), debug: os.Getenv("IAMT_IDER_DEBUG") != ""}
 
 	dialer := &net.Dialer{Timeout: cfg.DialTimeout}
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
@@ -161,6 +163,7 @@ func (s *Session) Close() error {
 
 func (s *Session) finish(err error) {
 	s.closeOnce.Do(func() {
+		s.dbg("session closing: err=%v", err)
 		s.errMu.Lock()
 		s.err = err
 		s.errMu.Unlock()
@@ -219,6 +222,12 @@ func (s *Session) isClosed() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (s *Session) dbg(format string, args ...any) {
+	if s.debug {
+		fmt.Fprintf(os.Stderr, "[ider] "+format+"\n", args...)
 	}
 }
 

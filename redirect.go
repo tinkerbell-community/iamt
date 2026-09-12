@@ -86,6 +86,22 @@ func (c *Client) MountISO(ctx context.Context, image io.ReaderAt, size int64) (*
 	return &RedirectSession{inner: sess}, nil
 }
 
+// MountURL is like MountISO but streams the image directly from a URL using
+// HTTP Range requests, so nothing is written to local disk. The URL may
+// redirect once to presigned object storage (as the Talos Image Factory does);
+// the resolved location is fetched from with range requests and hot sectors are
+// cached in memory. The server must support range requests (HTTP 206).
+func (c *Client) MountURL(ctx context.Context, url string) (*RedirectSession, error) {
+	reader, err := newHTTPRangeReaderAt(ctx, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if reader.Size()%isoSectorSize != 0 {
+		return nil, fmt.Errorf("iamt: image %s size %d is not a multiple of %d", url, reader.Size(), isoSectorSize)
+	}
+	return c.MountISO(ctx, reader, reader.Size())
+}
+
 // Close ends the redirection session.
 func (r *RedirectSession) Close() error { return r.inner.Close() }
 

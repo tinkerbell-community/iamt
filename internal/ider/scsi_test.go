@@ -217,3 +217,53 @@ func TestKeepAlivePingIsPonged(t *testing.T) {
 		t.Fatalf("expected a 0x45 pong, got % x", cc.writes)
 	}
 }
+
+// cmdEnd returns the last 0x51 command-end frame written.
+func lastCmdEnd(t *testing.T, cc *captureConn) []byte {
+	t.Helper()
+	for i := len(cc.writes) - 1; i >= 0; i-- {
+		if len(cc.writes[i]) > 0 && cc.writes[i][0] == 0x51 {
+			return cc.writes[i]
+		}
+	}
+	t.Fatal("no 0x51 command-end frame written")
+	return nil
+}
+
+// TestFloppySlotReportsNoMedium verifies the phantom floppy slot answers every
+// media command with a real NOT READY / medium-not-present sense (0x02/0x3a) —
+// never a GOOD status (which makes the guest think media is present) and never
+// ILLEGAL REQUEST (0x05, which makes Linux usb-storage reset the bus in a loop).
+func TestFloppySlotReportsNoMedium(t *testing.T) {
+	iso := makeISO(4)
+	cmds := map[string][]byte{
+		"TEST_UNIT_READY":        {0x00},
+		"READ_CAPACITY":          {0x25},
+		"READ_FORMAT_CAPACITIES": {0x23},
+		"MODE_SENSE_6":           {0x1a, 0x00, 0x3f},
+		"MODE_SENSE_10":          {0x5a, 0x00, 0x3f, 0, 0, 0, 0, 0x00, 0xc0},
+		"ALLOW_MEDIUM_REMOVAL":   {0x1e},
+		"WRITE_10":               {0x2a},
+	}
+	for name, cdb := range cmds {
+		t.Run(name, func(t *testing.T) {
+			s, cc := newTestSession(t, iso, blockSize)
+			full := make([]byte, 12)
+			copy(full, cdb)
+			if err := s.handleSCSI(devFloppy, full, 0, devFloppy); err != nil {
+				t.Fatalf("handleSCSI: %v", err)
+			}
+			frame := lastCmdEnd(t, cc)
+			if len(frame) < 31 {
+				t.Fatalf("short command-end frame: % x", frame)
+			}
+			marker, sense, asc := frame[20], frame[28], frame[29]
+			if marker != 0x87 {
+				t.Fatalf("marker = 0x%02x, want CHECK CONDITION 0x87 (not GOOD/other)", marker)
+			}
+			if sense != 0x02 || asc != 0x3a {
+				t.Fatalf("sense = 0x%02x/0x%02x, want 0x02/0x3a (medium not present)", sense, asc)
+			}
+		})
+	}
+}

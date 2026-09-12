@@ -89,6 +89,7 @@ func (s *Session) processIDER() (consumed int, established bool, err error) {
 		if writeBfr > 8192 {
 			return 0, false, fmt.Errorf("ider: illegal write buffer size %d", writeBfr)
 		}
+		s.dbg("OPEN_SESSION reply: readbfr=%d writebfr=%d proto=%d", s.readBfr, writeBfr, proto)
 		// Arm IDER for the next reboot.
 		if err := s.sendEnableFeatures(3, iderStartOnReboot); err != nil {
 			return 0, false, err
@@ -194,6 +195,9 @@ func (s *Session) sendEnableFeatures(typ byte, value uint32) error {
 
 // sendCommandEndResponse sends a SCSI completion/sense (0x51).
 func (s *Session) sendCommandEndResponse(genericStatus bool, sense, device, asc, asq byte) error {
+	if !genericStatus {
+		s.dbg("SENSE dev=0x%02x sense=0x%02x asc=0x%02x asq=0x%02x", device, sense, asc, asq)
+	}
 	var resp []byte
 	if genericStatus {
 		resp = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc5, 0, 3, 0, 0, 0, device, 0x50, 0, 0, 0}
@@ -226,6 +230,7 @@ func (s *Session) sendDataToHost(device byte, completed bool, data []byte, dma b
 // handleSCSI dispatches an ATAPI command from the host.
 func (s *Session) handleSCSI(dev byte, cdb []byte, featureRegister, deviceFlags byte) error {
 	dma := featureRegister&1 != 0
+	s.dbg("SCSI op=0x%02x dev=0x%02x fr=0x%02x dma=%v cdb=% x", cdb[0], dev, featureRegister, dma, cdb)
 	switch cdb[0] {
 	case 0x00: // TEST_UNIT_READY
 		if dev == devCDDVD {
@@ -235,7 +240,10 @@ func (s *Session) handleSCSI(dev byte, cdb []byte, featureRegister, deviceFlags 
 			}
 			return s.sendCommandEndResponse(true, 0x00, dev, 0x00, 0x00)
 		}
-		return s.sendCommandEndResponse(true, 0x02, dev, 0x3a, 0x00) // floppy: no medium
+		// Floppy slot: report NOT READY / medium not present as a real sense.
+		// A GOOD status here makes Linux believe an empty floppy has media and
+		// then hammer MODE_SENSE/READ_CAPACITY, resetting the USB bus in a loop.
+		return s.sendCommandEndResponse(false, 0x02, dev, 0x3a, 0x00)
 
 	case 0x08: // READ_6
 		lba := (int64(cdb[1]&0x1f) << 16) | (int64(cdb[2]) << 8) | int64(cdb[3])
@@ -251,10 +259,13 @@ func (s *Session) handleSCSI(dev byte, cdb []byte, featureRegister, deviceFlags 
 		return s.sendDiskData(dev, lba, n, dma)
 
 	case 0x0a, 0x2a, 0x2e: // WRITE_6 / WRITE_10 / WRITE_AND_VERIFY - not supported
-		return s.sendCommandEndResponse(true, 0x02, dev, 0x3a, 0x00)
+		return s.sendCommandEndResponse(false, 0x02, dev, 0x3a, 0x00)
 
 	case 0x1a: // MODE_SENSE_6
-		if cdb[2] == 0x3f && cdb[3] == 0x00 && dev == devCDDVD {
+		if dev != devCDDVD {
+			return s.sendCommandEndResponse(false, 0x02, dev, 0x3a, 0x00) // floppy: no medium present
+		}
+		if cdb[2] == 0x3f && cdb[3] == 0x00 {
 			return s.sendDataToHost(dev, true, []byte{0, 0x05, 0x80, 0}, dma)
 		}
 		return s.sendCommandEndResponse(false, 0x05, dev, 0x24, 0x00)
@@ -266,11 +277,11 @@ func (s *Session) handleSCSI(dev byte, cdb []byte, featureRegister, deviceFlags 
 		if dev == devCDDVD {
 			return s.sendCommandEndResponse(true, 0x00, dev, 0x00, 0x00)
 		}
-		return s.sendCommandEndResponse(true, 0x02, dev, 0x3a, 0x00)
+		return s.sendCommandEndResponse(false, 0x02, dev, 0x3a, 0x00)
 
 	case 0x23: // READ_FORMAT_CAPACITIES
 		if dev != devCDDVD {
-			return s.sendCommandEndResponse(false, 0x05, dev, 0x24, 0x00)
+			return s.sendCommandEndResponse(false, 0x02, dev, 0x3a, 0x00) // floppy: no medium present
 		}
 		payload := append(be32(8), []byte{0x00, 0x00, 0x0b, 0x40, 0x02, 0x00, 0x02, 0x00}...)
 		return s.sendDataToHost(dev, true, payload, dma)
@@ -380,7 +391,7 @@ func (s *Session) modeSense10(dev byte, cdb []byte, dma bool) error {
 		return s.sendDataToHost(dev, true, append(be32(0x003c), be32(0x0008)...), dma)
 	}
 	if dev != devCDDVD {
-		return s.sendCommandEndResponse(false, 0x05, dev, 0x20, 0x00)
+		return s.sendCommandEndResponse(false, 0x02, dev, 0x3a, 0x00) // floppy: no medium present
 	}
 	var r []byte
 	switch cdb[2] & 0x3f {
@@ -414,6 +425,7 @@ func (s *Session) sendDiskData(dev byte, lba, count int64, dma bool) error {
 	if count == 0 {
 		return s.sendCommandEndResponse(true, 0x00, dev, 0x00, 0x00)
 	}
+	s.dbg("READ dev=0x%02x lba=%d count=%d", dev, lba, count)
 	offset := lba << 11
 	remaining := count << 11
 	maxChunk := int64(s.readBfr)
