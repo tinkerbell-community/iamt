@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: MPL-2.0
+
+package iamt
+
+import (
+	"context"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/jacobweinstock/iamt/internal/digest"
+	"github.com/jacobweinstock/iamt/internal/ider"
+)
+
+// Redirection ports. AMT serves storage/serial redirection on these,
+// distinct from the WS-Man ports (16992/16993).
+const (
+	// RedirectionPortPlaintext is the non-TLS redirection port.
+	RedirectionPortPlaintext = 16994
+	// RedirectionPortTLS is the TLS redirection port.
+	RedirectionPortTLS = 16995
+)
+
+// RedirectSession is a running storage-redirection (IDE-R/USB-R) session that
+// serves an image to the managed host as a bootable CD-ROM. It runs in the
+// background until Close is called or the context passed to MountISO is
+// cancelled.
+type RedirectSession struct {
+	inner *ider.Session
+}
+
+// MountISO enables AMT redirection, opens a redirection session, and serves
+// the given CD image to the host, arming a one-shot boot from it on the next
+// host reset. The image is read on demand for the life of the session, so the
+// caller must keep it open until Close.
+//
+// The returned session does not itself reset the host; the caller issues a
+// power action (PowerCycle/PowerOn) to boot the redirected image, then holds
+// the session open until the OS has finished reading from it.
+//
+// image must be a valid ISO 9660 CD image whose length (size) is a multiple of
+// 2048 bytes.
+func (c *Client) MountISO(ctx context.Context, image io.ReaderAt, size int64) (*RedirectSession, error) {
+	if err := c.conn.EnableRedirection(ctx); err != nil {
+		return nil, err
+	}
+
+	useTLS := strings.EqualFold(c.Scheme, "https")
+	port := RedirectionPortPlaintext
+	var tlsCfg *tls.Config
+	if useTLS {
+		port = RedirectionPortTLS
+		tlsCfg = &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // AMT is self-signed; trust comes from the pin
+			MinVersion:         tls.VersionTLS10,
+		}
+		if c.PinnedCert != "" {
+			tlsCfg.VerifyPeerCertificate = digest.PinnedCertVerifier(c.PinnedCert)
+		}
+	}
+
+	sess, err := ider.Start(ctx, ider.Config{
+		Host:        c.Host,
+		Port:        port,
+		TLS:         tlsCfg,
+		User:        c.User,
+		Pass:        c.Pass,
+		Image:       image,
+		ImageSize:   size,
+		Logger:      c.Logger,
+		DialTimeout: c.timeout(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("iamt: mounting ISO over redirection: %w", err)
+	}
+	return &RedirectSession{inner: sess}, nil
+}
+
+// Close ends the redirection session.
+func (r *RedirectSession) Close() error { return r.inner.Close() }
+
+// Done is closed when the session ends (by Close, context cancellation, or a
+// protocol error).
+func (r *RedirectSession) Done() <-chan struct{} { return r.inner.Done() }
+
+// Err reports why the session ended, or nil if it was closed cleanly.
+func (r *RedirectSession) Err() error { return r.inner.Err() }
