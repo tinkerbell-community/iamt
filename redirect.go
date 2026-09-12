@@ -74,6 +74,15 @@ func (c *Client) MountISO(ctx context.Context, image io.ReaderAt, size int64) (*
 	if err != nil {
 		return nil, fmt.Errorf("iamt: mounting ISO over redirection: %w", err)
 	}
+
+	// Select the redirected CD as the boot source and let AMT disable Secure
+	// Boot for it, so an unsigned image boots. Do this after the data session
+	// is up so the disk is ready the moment the host boots.
+	if err := c.conn.ArmIDERBoot(ctx, false); err != nil {
+		_ = sess.Close()
+		return nil, err
+	}
+
 	return &RedirectSession{inner: sess}, nil
 }
 
